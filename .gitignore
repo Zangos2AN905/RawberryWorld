@@ -1,1 +1,20 @@
+# We should never commit builds to the repo, so when commiting, the build will never be leaked.
 /build
+
+# Common Windows shit
+
+Thumbs.db
+Desktop.ini
+
+# aseprite files
+*.aseprite
+*.ase
+
+# Common Mac OS shit
+.DS_Store
+
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
+*.swo
