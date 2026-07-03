@@ -17,6 +17,9 @@
 #include <SDL_ttf.h>
 #include <SDL_image.h>
 
+#include "physics.h"
+#include "rendering.h"
+
 // Screen dimensions
 const int SCREEN_WIDTH = 848;
 const int SCREEN_HEIGHT = 480;
@@ -71,25 +74,105 @@ int main(int argc, char *argv[]) {
         goto cleanup;
     }
 
+    // Initialize physics
+    SonicPhysics::InitPhysics();
+    SonicPhysics::SetPlayerPosition(0.0f, 0.0f);
+    SonicPhysics::SetGrounded(true);
+
+    // Initialize rendering
+    if (!Rendering::InitRendering(renderer)) {
+        fprintf(stderr, "Failed to initialize rendering\n");
+        goto cleanup;
+    }
+
     // --- GAME LOOP ---
     bool isRunning = true;
     SDL_Event event;
+    Uint32 lastTime = SDL_GetTicks();
+
+    bool inputLeft = false;
+    bool inputRight = false;
+    bool inputJump = false;
+    bool inputDown = false;
 
     while (isRunning) {
+        Uint32 currentTime = SDL_GetTicks();
+        int deltaTime = currentTime - lastTime;
+        lastTime = currentTime;
+
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) {
                 isRunning = false;
+            } else if (event.type == SDL_KEYDOWN) {
+                switch (event.key.keysym.sym) {
+                    case SDLK_LEFT:
+                    case SDLK_a:
+                        inputLeft = true;
+                        break;
+                    case SDLK_RIGHT:
+                    case SDLK_d:
+                        inputRight = true;
+                        break;
+                    case SDLK_SPACE:
+                    case SDLK_UP:
+                    case SDLK_w:
+                        inputJump = true;
+                        break;
+                    case SDLK_DOWN:
+                    case SDLK_s:
+                        inputDown = true;
+                        break;
+                    case SDLK_ESCAPE:
+                        isRunning = false;
+                        break;
+                }
+            } else if (event.type == SDL_KEYUP) {
+                switch (event.key.keysym.sym) {
+                    case SDLK_LEFT:
+                    case SDLK_a:
+                        inputLeft = false;
+                        break;
+                    case SDLK_RIGHT:
+                    case SDLK_d:
+                        inputRight = false;
+                        break;
+                    case SDLK_SPACE:
+                    case SDLK_UP:
+                    case SDLK_w:
+                        inputJump = false;
+                        break;
+                    case SDLK_DOWN:
+                    case SDLK_s:
+                        inputDown = false;
+                        break;
+                }
             }
         }
 
+        // Update physics
+        SonicPhysics::UpdatePhysics(inputLeft, inputRight, inputJump, inputDown, deltaTime);
+
+        // Get player state for rendering
+        const SonicPhysics::CharacterState& player = SonicPhysics::GetPlayerState();
+
+        // Update camera to follow player
+        Rendering::SetCamera(static_cast<int>(player.x), static_cast<int>(player.y));
+
         // Clear screen to black
         SDL_RenderClear(renderer);
+
+        // Render ground indicator
+        Rendering::RenderGroundIndicator();
+
+        // Render player
+        Rendering::RenderPlayer(player, deltaTime / 1000.0f * 60.0f, inputDown);
 
         // Update screen
         SDL_RenderPresent(renderer);
     }
 
     // --- CLEANUP ---
+    Rendering::CleanupRendering();
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
 
