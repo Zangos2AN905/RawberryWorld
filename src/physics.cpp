@@ -10,20 +10,6 @@ constexpr int WORLD_MAX_X = 3000;
 constexpr int WORLD_MIN_Y = -1000;
 constexpr int WORLD_MAX_Y = 1000;
 
-// Forward declarations
-void UpdateGroundPhysics(bool inputLeft, bool inputRight, bool inputJump, bool inputDown, float dt);
-void UpdateAirPhysics(bool inputLeft, bool inputRight, bool inputJump, float dt);
-void UpdateSpindash(bool inputJump, float dt);
-void UpdateFlight(bool inputLeft, bool inputRight, bool inputJump, float dt);
-void Jump();
-void StartRoll();
-void StopRoll();
-void StartSpindash();
-void ReleaseSpindash();
-void StartFlight();
-
-CharacterState player;
-
 inline float clamp(float value, float min, float max) {
     return std::max(min, std::min(max, value));
 }
@@ -32,222 +18,240 @@ inline float sign(float value) {
     return (value > 0) - (value < 0);
 }
 
-void InitPhysics() {
-    player = CharacterState();
+PhysicsEngine::PhysicsEngine() = default;
+
+void PhysicsEngine::Init() {
+    player_ = CharacterState();
+    prevJump_ = false;
 }
 
-void UpdatePhysics(bool inputLeft, bool inputRight, bool inputJump, bool inputDown, int deltaTime) {
+void PhysicsEngine::Update(bool inputLeft, bool inputRight, bool inputJump, bool inputDown, int deltaTime) {
     const float dt = deltaTime / 1000.0f * 60.0f;
 
-    if (player.grounded) {
-        UpdateGroundPhysics(inputLeft, inputRight, inputJump, inputDown, dt);
+    if (player_.grounded) {
+        UpdateGround(inputLeft, inputRight, inputJump, inputDown, dt);
     } else {
-        UpdateAirPhysics(inputLeft, inputRight, inputJump, dt);
+        UpdateAir(inputLeft, inputRight, inputJump, dt);
     }
 
-    player.x += player.velocityX * dt;
-    player.y += player.velocityY * dt;
+    // Don't apply velocity movement during spindash charge (player stays put)
+    if (!player_.spindashing) {
+        player_.x += player_.velocityX * dt;
+        player_.y += player_.velocityY * dt;
+    }
 
     // Clamp player position to world bounds
-    player.x = clamp(player.x, static_cast<float>(WORLD_MIN_X), static_cast<float>(WORLD_MAX_X));
-    player.y = clamp(player.y, static_cast<float>(WORLD_MIN_Y), static_cast<float>(WORLD_MAX_Y));
+    player_.x = clamp(player_.x, static_cast<float>(WORLD_MIN_X), static_cast<float>(WORLD_MAX_X));
+    player_.y = clamp(player_.y, static_cast<float>(WORLD_MIN_Y), static_cast<float>(WORLD_MAX_Y));
 
-    if (player.y > 0.0f) {
-        player.y = 0.0f;
-        player.velocityY = 0.0f;
-        player.grounded = true;
-        player.angle = 0.0f;
+    // Ground collision - simple flat ground at y=0
+    if (player_.y > 0.0f) {
+        player_.y = 0.0f;
+        player_.velocityY = 0.0f;
+        player_.grounded = true;
+        player_.angle = 0.0f;
     }
 
-    if (player.spindashing) {
-        UpdateSpindash(inputJump, dt);
-    }
-
-    if (player.flying) {
+    if (player_.flying) {
         UpdateFlight(inputLeft, inputRight, inputJump, dt);
     }
 }
 
-void UpdateGroundPhysics(bool inputLeft, bool inputRight, bool inputJump, bool inputDown, float dt) {
-    float accel = ACCELERATION;
-    float decel = DECELERATION;
-    float friction = FRICTION;
-    float topSpeed = TOP_SPEED;
+void PhysicsEngine::UpdateGround(bool inputLeft, bool inputRight, bool inputJump, bool inputDown, float dt) {
+    // Slope gravity always applies
+    float slopeFactor = std::sin(player_.angle) * GRAVITY * 16.0f;
+    player_.groundSpeed -= slopeFactor * dt;
 
-    if (player.rolling) {
-        accel = 0.0f;
-        decel = 0.0f;
-        friction = 0.0f;
-        topSpeed = 16.0f;
-    }
+    bool jumpPressed = inputJump && !prevJump_;
+    prevJump_ = inputJump;
 
-    if (inputLeft && inputRight) {
-        if (std::abs(player.groundSpeed) > 0.0f) {
-            player.groundSpeed -= sign(player.groundSpeed) * decel * dt;
-            player.groundSpeed = clamp(player.groundSpeed, -0.5f, 0.5f);
-            if (std::abs(player.groundSpeed) < 0.05f) player.groundSpeed = 0.0f;
+    // === SPINDASH CHARGING ===
+    if (player_.spindashing) {
+        // SPG decay: spinrev -= ((spinrev / 0.125) / 256)
+        spinrev_ -= (spinrev_ / 0.125f) / 256.0f;
+        if (spinrev_ < 0.0f) spinrev_ = 0.0f;
+
+        // Each jump press adds 2 revs (up to 8)
+        if (jumpPressed && spinrev_ < SPINDASH_MAX_REVS) {
+            spinrev_ += SPINDASH_REVS_PER_PRESS;
+            if (spinrev_ > SPINDASH_MAX_REVS)
+                spinrev_ = SPINDASH_MAX_REVS;
         }
-    } else if (inputLeft) {
-        if (player.groundSpeed > 0.0f) {
-            player.groundSpeed -= decel * dt;
+
+        // Release Down to launch
+        if (!inputDown) {
+            ReleaseSpindash();
         } else {
-            player.groundSpeed -= accel * dt;
+            // Keep player stationary during charge
+            player_.velocityX = 0.0f;
+            player_.velocityY = 0.0f;
         }
-        player.direction = -1;
-    } else if (inputRight) {
-        if (player.groundSpeed < 0.0f) {
-            player.groundSpeed += decel * dt;
-        } else {
-            player.groundSpeed += accel * dt;
-        }
-        player.direction = 1;
-    } else {
-        if (player.groundSpeed > 0.0f) {
-            player.groundSpeed = std::max(0.0f, player.groundSpeed - friction * dt);
-        } else if (player.groundSpeed < 0.0f) {
-            player.groundSpeed = std::min(0.0f, player.groundSpeed + friction * dt);
-        }
-    }
-
-    player.groundSpeed = clamp(player.groundSpeed, -topSpeed, topSpeed);
-
-    player.velocityX = player.groundSpeed * std::cos(player.angle);
-    player.velocityY = player.groundSpeed * std::sin(player.angle);
-
-    if (inputJump && !player.rolling && player.grounded) {
-        Jump();
-    }
-
-    if (inputDown && std::abs(player.groundSpeed) > 0.0f && !player.rolling) {
-        StartRoll();
-    } else if (!inputDown && player.rolling && std::abs(player.groundSpeed) < 0.5f) {
-        StopRoll();
-    }
-
-    if (inputDown && player.groundSpeed == 0.0f && !player.spindashing) {
-        StartSpindash();
-    }
-}
-
-void UpdateAirPhysics(bool inputLeft, bool inputRight, bool inputJump, float dt) {
-    player.velocityY += GRAVITY * dt;
-
-    if (inputLeft) {
-        player.velocityX -= ACCELERATION_AIR * dt;
-        player.direction = -1;
-    }
-    if (inputRight) {
-        player.velocityX += ACCELERATION_AIR * dt;
-        player.direction = 1;
-    }
-
-    float maxAirSpeed = TOP_SPEED * 2.0f;
-    player.velocityX = clamp(player.velocityX, -maxAirSpeed, maxAirSpeed);
-
-    if (inputJump && player.velocityY < 0.0f && player.jumpTimer > 0) {
-        player.velocityY -= 0.05f * dt;
-        player.jumpTimer--;
-    } else {
-        player.jumpTimer = 0;
-    }
-}
-
-void Jump() {
-    if (player.grounded) {
-        player.velocityY = JUMP_SPEED;
-        player.grounded = false;
-        player.jumpTimer = 10;
-        player.rolling = false;
-    }
-}
-
-void StartRoll() {
-    player.rolling = true;
-    float speed = std::sqrt(player.velocityX * player.velocityX + player.velocityY * player.velocityY);
-    player.groundSpeed = speed * player.direction;
-}
-
-void StopRoll() {
-    player.rolling = false;
-}
-
-void StartSpindash() {
-    player.spindashing = true;
-    player.spindashRev = 0;
-    player.spindashSpeed = 0.0f;
-    player.rolling = true;
-    player.groundSpeed = 0.0f;
-}
-
-void UpdateSpindash(bool inputJump, float dt) {
-    if (inputJump && player.spindashRev < SPINDASH_MAXREV) {
-        player.spindashRev++;
-        player.spindashSpeed += SPINDASH_ACCEL * dt;
-    }
-
-    if (!inputJump || player.spindashRev >= SPINDASH_MAXREV) {
-        ReleaseSpindash();
-    }
-}
-
-void ReleaseSpindash() {
-    player.spindashing = false;
-    if (player.spindashRev >= SPINDASH_MINREV) {
-        player.groundSpeed = player.spindashSpeed * 8.0f * player.direction;
-        player.velocityX = player.groundSpeed * std::cos(player.angle);
-        player.velocityY = player.groundSpeed * std::sin(player.angle);
-    }
-    player.spindashRev = 0;
-    player.spindashSpeed = 0.0f;
-}
-
-void StartFlight() {
-    if (!player.flying && !player.grounded) {
-        player.flying = true;
-        player.flightTimer = static_cast<int>(FLIGHT_TIME);
-    }
-}
-
-void UpdateFlight(bool inputLeft, bool inputRight, bool inputJump, float dt) {
-    player.flightTimer--;
-    if (player.flightTimer <= 0 || !inputJump) {
-        player.flying = false;
         return;
     }
 
-    player.velocityY += TAILS_FLIGHT_GRAV * dt;
+    // === SPINDASH INITIATION (takes priority over jump when crouching) ===
+    if (inputDown && std::abs(player_.groundSpeed) < 0.5f && !player_.rolling && jumpPressed) {
+        StartSpindash();
+        return;
+    }
 
+    // === JUMP (allowed even while rolling) ===
+    if (inputJump) {
+        DoJump();
+        return;
+    }
+
+    // === ROLLING STATE ===
+    if (player_.rolling) {
+        // Rolling: no input acceleration, just friction and slopes
+        if (player_.groundSpeed > 0.0f) {
+            player_.groundSpeed = std::max(0.0f, player_.groundSpeed - ROLLING_FRICTION * dt);
+        } else if (player_.groundSpeed < 0.0f) {
+            player_.groundSpeed = std::min(0.0f, player_.groundSpeed + ROLLING_FRICTION * dt);
+        }
+
+        // Stop rolling at very low speed
+        if (std::abs(player_.groundSpeed) < 0.5f) {
+            StopRoll();
+        }
+    } else {
+        // === WALKING STATE ===
+        // Input handling with acceleration/friction
+        float accel = ACCELERATION;
+        float decel = DECELERATION;
+        float friction = FRICTION;
+        float topSpeed = TOP_SPEED;
+
+        if (inputLeft && inputRight) {
+            // Both directions: brake to stop
+            if (std::abs(player_.groundSpeed) > 0.0f) {
+                player_.groundSpeed -= sign(player_.groundSpeed) * decel * dt;
+                if (std::abs(player_.groundSpeed) < 0.5f)
+                    player_.groundSpeed = 0.0f;
+            }
+        } else if (inputLeft) {
+            if (player_.groundSpeed > 0.0f)
+                player_.groundSpeed -= decel * dt;
+            else
+                player_.groundSpeed -= accel * dt;
+            player_.direction = -1;
+        } else if (inputRight) {
+            if (player_.groundSpeed < 0.0f)
+                player_.groundSpeed += decel * dt;
+            else
+                player_.groundSpeed += accel * dt;
+            player_.direction = 1;
+        } else {
+            // No input: friction
+            if (player_.groundSpeed > 0.0f)
+                player_.groundSpeed = std::max(0.0f, player_.groundSpeed - friction * dt);
+            else if (player_.groundSpeed < 0.0f)
+                player_.groundSpeed = std::min(0.0f, player_.groundSpeed + friction * dt);
+        }
+
+        player_.groundSpeed = clamp(player_.groundSpeed, -topSpeed, topSpeed);
+    }
+
+    // Convert ground speed to velocity
+    player_.velocityX = player_.groundSpeed * std::cos(player_.angle);
+    player_.velocityY = player_.groundSpeed * std::sin(player_.angle);
+
+    // Manual roll start (press down while moving)
+    if (inputDown && std::abs(player_.groundSpeed) > 1.0f && !player_.rolling) {
+        StartRoll();
+    }
+
+    // Stand up from roll
+    if (!inputDown && player_.rolling && std::abs(player_.groundSpeed) < 0.5f) {
+        StopRoll();
+    }
+}
+
+void PhysicsEngine::UpdateAir(bool inputLeft, bool inputRight, bool inputJump, float dt) {
+    // Gravity
+    player_.velocityY += GRAVITY * dt;
+
+    // Air control
     if (inputLeft) {
-        player.velocityX -= ACCELERATION_AIR * dt;
+        player_.velocityX -= ACCELERATION_AIR * dt;
+        player_.direction = -1;
     }
     if (inputRight) {
-        player.velocityX += ACCELERATION_AIR * dt;
+        player_.velocityX += ACCELERATION_AIR * dt;
+        player_.direction = 1;
     }
 
-    float maxFlightSpeed = TOP_SPEED * 1.5f;
-    player.velocityX = clamp(player.velocityX, -maxFlightSpeed, maxFlightSpeed);
+    // Clamp air speed
+    player_.velocityX = clamp(player_.velocityX, -TOP_SPEED * 2.0f, TOP_SPEED * 2.0f);
+
+    // Jump hold bonus (reduced gravity while holding jump during ascent)
+    if (inputJump && player_.velocityY < 0.0f && player_.jumpTimer > 0) {
+        player_.velocityY -= 0.05f * dt;
+        player_.jumpTimer--;
+    } else {
+        player_.jumpTimer = 0;
+    }
 }
 
-void SetGroundAngle(float newAngle) {
-    player.angle = newAngle;
+void PhysicsEngine::DoJump() {
+    if (!player_.grounded) return;
+    player_.velocityY = JUMP_SPEED * std::cos(player_.angle);
+    player_.velocityX += JUMP_SPEED * std::sin(player_.angle) * -std::sin(player_.angle);
+    player_.grounded = false;
+    player_.jumpTimer = 10;
+    player_.rolling = false;
 }
 
-void SetGrounded(bool isGrounded) {
-    player.grounded = isGrounded;
+void PhysicsEngine::StartRoll() {
+    player_.rolling = true;
+    float speed = std::sqrt(player_.velocityX * player_.velocityX + player_.velocityY * player_.velocityY);
+    player_.groundSpeed = speed * player_.direction;
 }
 
-const CharacterState& GetPlayerState() {
-    return player;
+void PhysicsEngine::StopRoll() {
+    player_.rolling = false;
 }
 
-void SetPlayerPosition(float x, float y) {
-    player.x = x;
-    player.y = y;
+void PhysicsEngine::StartSpindash() {
+    player_.spindashing = true;
+    spinrev_ = 0.0f;
+    player_.rolling = true;
+    player_.groundSpeed = 0.0f;
+    player_.velocityX = 0.0f;
+    player_.velocityY = 0.0f;
 }
 
-void SetPlayerVelocity(float vx, float vy) {
-    player.velocityX = vx;
-    player.velocityY = vy;
+void PhysicsEngine::ReleaseSpindash() {
+    player_.spindashing = false;
+
+    // SPG: Ground Speed = 8 + floor(spinrev / 2), capped at 12
+    float releaseSpeed = 8.0f + std::floor(spinrev_ / 2.0f);
+    releaseSpeed = std::min(releaseSpeed, 12.0f);
+
+    player_.groundSpeed = releaseSpeed * player_.direction;
+    player_.velocityX = player_.groundSpeed * std::cos(player_.angle);
+    player_.velocityY = player_.groundSpeed * std::sin(player_.angle);
+    spinrev_ = 0.0f;
+    // rolling stays true for post-launch roll
+}
+
+void PhysicsEngine::UpdateFlight(bool inputLeft, bool inputRight, bool inputJump, float dt) {
+    player_.flightTimer--;
+    if (player_.flightTimer <= 0) {
+        player_.flying = false;
+        return;
+    }
+
+    player_.velocityY += TAILS_FLIGHT_GRAV * dt;
+
+    if (inputLeft) {
+        player_.velocityX -= ACCELERATION_AIR * dt;
+    }
+    if (inputRight) {
+        player_.velocityX += ACCELERATION_AIR * dt;
+    }
+
+    player_.velocityX = clamp(player_.velocityX, -TOP_SPEED * 1.5f, TOP_SPEED * 1.5f);
 }
 
 } // namespace SonicPhysics

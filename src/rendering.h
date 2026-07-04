@@ -1,18 +1,26 @@
 #ifndef RENDERING_H
 #define RENDERING_H
 
-#include <SDL2/SDL.h>
+#if __has_include(<SDL2/SDL.h>)
+    #include <SDL2/SDL.h>
+#else
+    #include <SDL.h>
+#endif
+
+const int SCREEN_WIDTH = 848;
+const int SCREEN_HEIGHT = 480;
+
 #include "physics.h"
 
 namespace Rendering {
-    const int SCREEN_WIDTH = 848;
-    const int SCREEN_HEIGHT = 480;
 
     bool InitRendering(SDL_Renderer* renderer);
-    void RenderPlayer(const SonicPhysics::CharacterState& player, float dt, bool inputDown);
-    void RenderGroundIndicator();
-    void SetCamera(int x, int y);
     void CleanupRendering();
+
+    void SetCamera(const SonicPhysics::CharacterState& player, bool inputDown = false, bool inputUp = false);
+    void RenderGroundIndicator();
+    void RenderPlayer(const SonicPhysics::CharacterState& player, float dt, bool inputDown);
+
 }
 
 #endif

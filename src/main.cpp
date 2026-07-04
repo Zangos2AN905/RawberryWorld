@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <memory>
+#include "testing/stagemus.h"
 
 // Include SDL2 headers
 #if __has_include(<SDL2/SDL.h>)
@@ -20,10 +22,6 @@
 #include "physics.h"
 #include "rendering.h"
 
-// Screen dimensions
-const int SCREEN_WIDTH = 848;
-const int SCREEN_HEIGHT = 480;
-
 int main(int argc, char *argv[]) {
     // 1. Initialize Core SDL (Video and Audio)
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
@@ -40,7 +38,6 @@ int main(int argc, char *argv[]) {
     }
 
     // 3. Initialize SDL_mixer (MIDI and SFX)
-    // MIX_INIT_MID is used if you are loading standard MIDI files
     if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) < 0) {
         fprintf(stderr, "SDL_mixer could not initialize: %s\n", Mix_GetError());
         IMG_Quit();
@@ -57,32 +54,41 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // 5. Create Window & Hardware Accelerated Renderer
-    // SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC ensures smooth, GPU-driven 60fps
-    SDL_Window* window = SDL_CreateWindow("RawberryWorld", 
-                                          SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 
+    // 5. Create Window
+    SDL_Window* window = SDL_CreateWindow("RawberryWorld",
+                                          SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
                                           SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_SHOWN);
     if (!window) {
         fprintf(stderr, "Window creation failed: %s\n", SDL_GetError());
-        goto cleanup;
+        TTF_Quit(); Mix_CloseAudio(); IMG_Quit(); SDL_Quit();
+        return 1;
     }
 
+    // 6. Create Hardware Accelerated Renderer
     SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (!renderer) {
         fprintf(stderr, "Renderer creation failed: %s\n", SDL_GetError());
         SDL_DestroyWindow(window);
-        goto cleanup;
+        TTF_Quit(); Mix_CloseAudio(); IMG_Quit(); SDL_Quit();
+        return 1;
     }
 
     // Initialize physics
-    SonicPhysics::InitPhysics();
-    SonicPhysics::SetPlayerPosition(0.0f, 0.0f);
-    SonicPhysics::SetGrounded(true);
+    SonicPhysics::PhysicsEngine physics;
+    physics.Init();
+    physics.SetPlayerPosition(0.0f, 0.0f);
+    physics.SetGrounded(true);
+
+    // Music
+    StartStageMusic();
 
     // Initialize rendering
     if (!Rendering::InitRendering(renderer)) {
         fprintf(stderr, "Failed to initialize rendering\n");
-        goto cleanup;
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        TTF_Quit(); Mix_CloseAudio(); IMG_Quit(); SDL_Quit();
+        return 1;
     }
 
     // --- GAME LOOP ---
@@ -94,6 +100,7 @@ int main(int argc, char *argv[]) {
     bool inputRight = false;
     bool inputJump = false;
     bool inputDown = false;
+    bool inputUp = false;
 
     while (isRunning) {
         Uint32 currentTime = SDL_GetTicks();
@@ -106,21 +113,19 @@ int main(int argc, char *argv[]) {
             } else if (event.type == SDL_KEYDOWN) {
                 switch (event.key.keysym.sym) {
                     case SDLK_LEFT:
-                    case SDLK_a:
                         inputLeft = true;
                         break;
                     case SDLK_RIGHT:
-                    case SDLK_d:
                         inputRight = true;
                         break;
-                    case SDLK_SPACE:
-                    case SDLK_UP:
-                    case SDLK_w:
+                    case SDLK_z:
                         inputJump = true;
                         break;
                     case SDLK_DOWN:
-                    case SDLK_s:
                         inputDown = true;
+                        break;
+                    case SDLK_UP:
+                        inputUp = true;
                         break;
                     case SDLK_ESCAPE:
                         isRunning = false;
@@ -129,36 +134,34 @@ int main(int argc, char *argv[]) {
             } else if (event.type == SDL_KEYUP) {
                 switch (event.key.keysym.sym) {
                     case SDLK_LEFT:
-                    case SDLK_a:
                         inputLeft = false;
                         break;
                     case SDLK_RIGHT:
-                    case SDLK_d:
                         inputRight = false;
                         break;
-                    case SDLK_SPACE:
-                    case SDLK_UP:
-                    case SDLK_w:
+                    case SDLK_z:
                         inputJump = false;
                         break;
                     case SDLK_DOWN:
-                    case SDLK_s:
                         inputDown = false;
+                        break;
+                    case SDLK_UP:
+                        inputUp = false;
                         break;
                 }
             }
         }
 
         // Update physics
-        SonicPhysics::UpdatePhysics(inputLeft, inputRight, inputJump, inputDown, deltaTime);
+        physics.Update(inputLeft, inputRight, inputJump, inputDown, deltaTime);
 
         // Get player state for rendering
-        const SonicPhysics::CharacterState& player = SonicPhysics::GetPlayerState();
+        const SonicPhysics::CharacterState& player = physics.GetPlayerState();
 
-        // Update camera to follow player
-        Rendering::SetCamera(static_cast<int>(player.x), static_cast<int>(player.y));
+        // Update camera to follow player (SPG-style with look-ahead)
+        Rendering::SetCamera(player, inputDown, inputUp);
 
-        // Clear screen to black
+        // Clear screen
         SDL_RenderClear(renderer);
 
         // Render ground indicator
@@ -175,8 +178,6 @@ int main(int argc, char *argv[]) {
     Rendering::CleanupRendering();
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
-
-cleanup:
     TTF_Quit();
     Mix_CloseAudio();
     IMG_Quit();

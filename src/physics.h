@@ -8,17 +8,17 @@ namespace SonicPhysics {
     constexpr float ACCELERATION = 0.046875f;
     constexpr float DECELERATION = 0.5f;
     constexpr float FRICTION = 0.046875f;
+    constexpr float ROLLING_FRICTION = 0.0234375f;
     constexpr float JUMP_SPEED = -6.5f;
     constexpr float ACCELERATION_AIR = 0.09375f;
 
-    // Special physics constants for Characters such as Sonic
-    constexpr float SPINDASH_MINREV = 4;
-    constexpr float SPINDASH_MAXREV = 10;
-    constexpr float SPINDASH_ACCEL = 0.2125f; // increases by 0.2125f when jump key is pressed in spindash state
-    constexpr float TAILS_FLIGHT_GRAV = 0.125f; // Tails' flight gravity is lower than normal gravity
+    // Spindash constants (SPG spec)
+    constexpr float SPINDASH_REVS_PER_PRESS = 2.0f;
+    constexpr float SPINDASH_MAX_REVS = 8.0f;
 
-    // Other non-physics constants
-    constexpr float FLIGHT_TIME = 480.0f; // Tails' flight time in frames (8 seconds, calculated in frames)
+    // Tails flight
+    constexpr float TAILS_FLIGHT_GRAV = 0.125f;
+    constexpr float FLIGHT_TIME = 480.0f;
 
     struct CharacterState {
         float x = 0.0f;
@@ -30,22 +30,40 @@ namespace SonicPhysics {
         bool grounded = false;
         bool rolling = false;
         bool spindashing = false;
-        int spindashRev = 0;
-        float spindashSpeed = 0.0f;
         int jumpTimer = 0;
         int flightTimer = 0;
         bool flying = false;
-        int direction = 1; // 1 = right, -1 = left
+        int direction = 1;
     };
 
-    void InitPhysics();
-    void UpdatePhysics(bool inputLeft, bool inputRight, bool inputJump, bool inputDown, int deltaTime);
-    void SetGroundAngle(float newAngle);
-    void SetGrounded(bool isGrounded);
-    const CharacterState& GetPlayerState();
-    void SetPlayerPosition(float x, float y);
-    void SetPlayerVelocity(float vx, float vy);
-    void StartFlight();
+    class PhysicsEngine {
+    public:
+        PhysicsEngine();
+
+        void Init();
+        void Update(bool inputLeft, bool inputRight, bool inputJump, bool inputDown, int deltaTime);
+
+        const CharacterState& GetPlayerState() const { return player_; }
+
+        void SetPlayerPosition(float x, float y) { player_.x = x; player_.y = y; }
+        void SetGrounded(bool grounded) { player_.grounded = grounded; }
+        void SetPlayerVelocity(float vx, float vy) { player_.velocityX = vx; player_.velocityY = vy; }
+        void SetGroundAngle(float angle) { player_.angle = angle; }
+
+    private:
+        void UpdateGround(bool inputLeft, bool inputRight, bool inputJump, bool inputDown, float dt);
+        void UpdateAir(bool inputLeft, bool inputRight, bool inputJump, float dt);
+        void UpdateFlight(bool inputLeft, bool inputRight, bool inputJump, float dt);
+        void DoJump();
+        void StartRoll();
+        void StopRoll();
+        void StartSpindash();
+        void ReleaseSpindash();
+
+        CharacterState player_;
+        bool prevJump_ = false;
+        float spinrev_ = 0.0f;  // Spindash revs (internal float for SPG decay)
+    };
 }
 
 #endif
