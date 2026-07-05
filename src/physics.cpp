@@ -1,4 +1,5 @@
 #include "physics.h"
+#include "level.h"
 #include <cmath>
 #include <algorithm>
 
@@ -28,6 +29,28 @@ void PhysicsEngine::Init() {
 void PhysicsEngine::Update(bool inputLeft, bool inputRight, bool inputJump, bool inputDown, int deltaTime) {
     const float dt = deltaTime / 1000.0f * 60.0f;
 
+    // Check ground at current position to determine grounded state
+    if (level_) {
+        float groundY, groundAngle;
+        if (level_->GetGroundInfo(player_.x, groundY, groundAngle)) {
+            // Within 4px of surface = grounded
+            if (player_.y >= groundY - 4.0f) {
+                player_.grounded = true;
+                player_.angle = groundAngle;
+            } else {
+                player_.grounded = false;
+            }
+        } else {
+            player_.grounded = false;
+        }
+    } else {
+        // Fallback flat ground at y=0
+        if (player_.y >= 0.0f) {
+            player_.grounded = true;
+            player_.angle = 0.0f;
+        }
+    }
+
     if (player_.grounded) {
         UpdateGround(inputLeft, inputRight, inputJump, inputDown, dt);
     } else {
@@ -44,13 +67,8 @@ void PhysicsEngine::Update(bool inputLeft, bool inputRight, bool inputJump, bool
     player_.x = clamp(player_.x, static_cast<float>(WORLD_MIN_X), static_cast<float>(WORLD_MAX_X));
     player_.y = clamp(player_.y, static_cast<float>(WORLD_MIN_Y), static_cast<float>(WORLD_MAX_Y));
 
-    // Ground collision - simple flat ground at y=0
-    if (player_.y > 0.0f) {
-        player_.y = 0.0f;
-        player_.velocityY = 0.0f;
-        player_.grounded = true;
-        player_.angle = 0.0f;
-    }
+    // Post-movement ground collision
+    ResolveGroundCollision();
 
     if (player_.flying) {
         UpdateFlight(inputLeft, inputRight, inputJump, dt);
@@ -58,9 +76,22 @@ void PhysicsEngine::Update(bool inputLeft, bool inputRight, bool inputJump, bool
 }
 
 void PhysicsEngine::UpdateGround(bool inputLeft, bool inputRight, bool inputJump, bool inputDown, float dt) {
-    // Slope gravity always applies
-    float slopeFactor = std::sin(player_.angle) * GRAVITY * 16.0f;
-    player_.groundSpeed -= slopeFactor * dt;
+    // Slope factor (SPG:Slope_Physics)
+    // sin(angle) for our atan2 convention:
+    //   angle < 0 (uphill right)  → sin < 0 → groundSpeed decreases
+    //   angle > 0 (downhill right) → sin > 0 → groundSpeed increases
+    float slopeFactor;
+    if (player_.rolling) {
+        // Rolling: uphill when moving against gravity direction
+        if (player_.groundSpeed * std::sin(player_.angle) < 0.0f) {
+            slopeFactor = SLOPE_FACTOR_ROLL_UP;
+        } else {
+            slopeFactor = SLOPE_FACTOR_ROLL_DOWN;
+        }
+    } else {
+        slopeFactor = SLOPE_FACTOR_NORMAL;
+    }
+    player_.groundSpeed += std::sin(player_.angle) * slopeFactor * dt;
 
     bool jumpPressed = inputJump && !prevJump_;
     prevJump_ = inputJump;
@@ -117,10 +148,11 @@ void PhysicsEngine::UpdateGround(bool inputLeft, bool inputRight, bool inputJump
     } else {
         // === WALKING STATE ===
         // Input handling with acceleration/friction
+        // TOP_SPEED is a soft cap: acceleration stops above it, but
+        // external forces (slopes, rolling) can push speed higher.
         float accel = ACCELERATION;
         float decel = DECELERATION;
         float friction = FRICTION;
-        float topSpeed = TOP_SPEED;
 
         if (inputLeft && inputRight) {
             // Both directions: brake to stop
@@ -132,14 +164,16 @@ void PhysicsEngine::UpdateGround(bool inputLeft, bool inputRight, bool inputJump
         } else if (inputLeft) {
             if (player_.groundSpeed > 0.0f)
                 player_.groundSpeed -= decel * dt;
-            else
+            else if (player_.groundSpeed > -TOP_SPEED)
                 player_.groundSpeed -= accel * dt;
+            // else: beyond soft cap leftward, no extra acceleration
             player_.direction = -1;
         } else if (inputRight) {
             if (player_.groundSpeed < 0.0f)
                 player_.groundSpeed += decel * dt;
-            else
+            else if (player_.groundSpeed < TOP_SPEED)
                 player_.groundSpeed += accel * dt;
+            // else: beyond soft cap rightward, no extra acceleration
             player_.direction = 1;
         } else {
             // No input: friction
@@ -148,9 +182,10 @@ void PhysicsEngine::UpdateGround(bool inputLeft, bool inputRight, bool inputJump
             else if (player_.groundSpeed < 0.0f)
                 player_.groundSpeed = std::min(0.0f, player_.groundSpeed + friction * dt);
         }
-
-        player_.groundSpeed = clamp(player_.groundSpeed, -topSpeed, topSpeed);
     }
+
+    // Hard cap at MAX_SPEED (applies to both walking and rolling)
+    player_.groundSpeed = clamp(player_.groundSpeed, -MAX_SPEED, MAX_SPEED);
 
     // Convert ground speed to velocity
     player_.velocityX = player_.groundSpeed * std::cos(player_.angle);
@@ -168,6 +203,12 @@ void PhysicsEngine::UpdateGround(bool inputLeft, bool inputRight, bool inputJump
 }
 
 void PhysicsEngine::UpdateAir(bool inputLeft, bool inputRight, bool inputJump, float dt) {
+    // Variable jump height (SPG): cap upward speed if jump button released
+    // Check happens BEFORE gravity is applied (per SPG spec)
+    if (!inputJump && player_.velocityY < -8.0f) {
+        player_.velocityY = -8.0f;
+    }
+
     // Gravity
     player_.velocityY += GRAVITY * dt;
 
@@ -183,22 +224,17 @@ void PhysicsEngine::UpdateAir(bool inputLeft, bool inputRight, bool inputJump, f
 
     // Clamp air speed
     player_.velocityX = clamp(player_.velocityX, -TOP_SPEED * 2.0f, TOP_SPEED * 2.0f);
-
-    // Jump hold bonus (reduced gravity while holding jump during ascent)
-    if (inputJump && player_.velocityY < 0.0f && player_.jumpTimer > 0) {
-        player_.velocityY -= 0.05f * dt;
-        player_.jumpTimer--;
-    } else {
-        player_.jumpTimer = 0;
-    }
 }
 
 void PhysicsEngine::DoJump() {
     if (!player_.grounded) return;
-    player_.velocityY = JUMP_SPEED * std::cos(player_.angle);
-    player_.velocityX += JUMP_SPEED * std::sin(player_.angle) * -std::sin(player_.angle);
+    // SPG: jump perpendicular to ground angle, preserving existing momentum
+    // Our atan2 convention: sin(angle) positive = downhill right, negative = uphill right
+    // SPG: X Speed -= jump_force * sin(angle)  →  velocityX += JUMP_FORCE * sin(angle)
+    // SPG: Y Speed -= jump_force * cos(angle)  →  velocityY -= JUMP_FORCE * cos(angle)
+    player_.velocityX += JUMP_FORCE * std::sin(player_.angle);
+    player_.velocityY -= JUMP_FORCE * std::cos(player_.angle);
     player_.grounded = false;
-    player_.jumpTimer = 10;
     player_.rolling = false;
 }
 
@@ -224,9 +260,9 @@ void PhysicsEngine::StartSpindash() {
 void PhysicsEngine::ReleaseSpindash() {
     player_.spindashing = false;
 
-    // SPG: Ground Speed = 8 + floor(spinrev / 2), capped at 12
-    float releaseSpeed = 8.0f + std::floor(spinrev_ / 2.0f);
-    releaseSpeed = std::min(releaseSpeed, 12.0f);
+    // SPG: Ground Speed = 16 + floor(spinrev / 2), capped at 24
+    float releaseSpeed = 16.0f + std::floor(spinrev_ / 2.0f);
+    releaseSpeed = std::min(releaseSpeed, 24.0f);
 
     player_.groundSpeed = releaseSpeed * player_.direction;
     player_.velocityX = player_.groundSpeed * std::cos(player_.angle);
@@ -252,6 +288,41 @@ void PhysicsEngine::UpdateFlight(bool inputLeft, bool inputRight, bool inputJump
     }
 
     player_.velocityX = clamp(player_.velocityX, -TOP_SPEED * 1.5f, TOP_SPEED * 1.5f);
+}
+
+void PhysicsEngine::ResolveGroundCollision() {
+    if (level_) {
+        float groundY, groundAngle;
+        if (level_->GetGroundInfo(player_.x, groundY, groundAngle)) {
+            if (player_.y >= groundY) {
+                // Snap to ground surface
+                player_.y = groundY;
+                player_.angle = groundAngle;
+
+                // Project world velocity onto the ground surface
+                float cosA = std::cos(groundAngle);
+                float sinA = std::sin(groundAngle);
+                player_.groundSpeed = player_.velocityX * cosA + player_.velocityY * sinA;
+                player_.velocityX = player_.groundSpeed * cosA;
+                player_.velocityY = player_.groundSpeed * sinA;
+
+                if (!player_.grounded) {
+                    player_.grounded = true;
+                }
+                return;
+            }
+        }
+        // Above ground or out of bounds: grounded state unchanged
+        // (will be set correctly on next frame's initial check)
+    } else {
+        // Fallback flat ground at y=0
+        if (player_.y > 0.0f) {
+            player_.y = 0.0f;
+            player_.velocityY = 0.0f;
+            player_.grounded = true;
+            player_.angle = 0.0f;
+        }
+    }
 }
 
 } // namespace SonicPhysics

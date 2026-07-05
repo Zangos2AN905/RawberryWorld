@@ -12,13 +12,15 @@ const int SCREEN_HEIGHT = 480;
 
 #include "physics.h"
 
+class Level;
+
 namespace Rendering {
 
     bool InitRendering(SDL_Renderer* renderer);
     void CleanupRendering();
 
     void SetCamera(const SonicPhysics::CharacterState& player, bool inputDown = false, bool inputUp = false);
-    void RenderGroundIndicator();
+    void RenderLevel(const Level& level);
     void RenderPlayer(const SonicPhysics::CharacterState& player, float dt, bool inputDown);
 
 }

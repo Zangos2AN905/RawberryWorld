@@ -21,6 +21,7 @@
 
 #include "physics.h"
 #include "rendering.h"
+#include "level.h"
 
 int main(int argc, char *argv[]) {
     // 1. Initialize Core SDL (Video and Audio)
@@ -78,6 +79,11 @@ int main(int argc, char *argv[]) {
     physics.Init();
     physics.SetPlayerPosition(0.0f, 0.0f);
     physics.SetGrounded(true);
+
+    // Build test level with slopes
+    Level testLevel;
+    testLevel.BuildTestLevel();
+    physics.SetLevel(&testLevel);
 
     // Music
     StartStageMusic();
@@ -164,8 +170,8 @@ int main(int argc, char *argv[]) {
         // Clear screen
         SDL_RenderClear(renderer);
 
-        // Render ground indicator
-        Rendering::RenderGroundIndicator();
+        // Render ground from level data
+        Rendering::RenderLevel(testLevel);
 
         // Render player
         Rendering::RenderPlayer(player, deltaTime / 1000.0f * 60.0f, inputDown);

@@ -1,5 +1,6 @@
 #include "rendering.h"
 #include "physics.h"
+#include "level.h"
 #if __has_include(<SDL2/SDL.h>)
     #include <SDL2/SDL.h>
 #else
@@ -335,26 +336,50 @@ void SetCamera(const SonicPhysics::CharacterState& player, bool inputDown, bool 
     cameraY = clamp(cameraY, WORLD_MIN_Y + halfScreenH, WORLD_MAX_Y - halfScreenH);
 }
 
-void RenderGroundIndicator() {
-    // ground at y=0 in world space maps to screenY = SCREEN_HEIGHT/2 + 0 - cameraY
-    int groundY = SCREEN_HEIGHT / 2 - cameraY;
+void RenderLevel(const Level& level) {
+    // Draw ground from level data — for each screen column,
+    // compute the world X, find ground height, fill below it
+    SDL_SetRenderDrawColor(gRenderer, 80, 80, 80, 255);
 
-    if (groundY >= 0 && groundY <= SCREEN_HEIGHT) {
-        SDL_SetRenderDrawColor(gRenderer, 80, 80, 80, 255);
+    int worldLeft = cameraX - SCREEN_WIDTH / 2;
+    int worldRight = cameraX + SCREEN_WIDTH / 2;
 
-        SDL_Rect groundRect = { 0, groundY, SCREEN_WIDTH, SCREEN_HEIGHT - groundY };
-        SDL_RenderFillRect(gRenderer, &groundRect);
+    // Fill below the ground surface for each screen column
+    for (int sx = 0; sx < SCREEN_WIDTH; sx++) {
+        int worldX = worldLeft + sx;
+        float groundY, groundAngle;
+        if (level.GetGroundInfo(static_cast<float>(worldX), groundY, groundAngle)) {
+            int screenY = SCREEN_HEIGHT / 2 + static_cast<int>(groundY) - cameraY;
+            if (screenY < SCREEN_HEIGHT) {
+                SDL_RenderDrawLine(gRenderer, sx, screenY, sx, SCREEN_HEIGHT);
+            }
+        }
+    }
 
-        SDL_SetRenderDrawColor(gRenderer, 100, 100, 100, 255);
-        SDL_RenderDrawLine(gRenderer, 0, groundY, SCREEN_WIDTH, groundY);
+    // Draw ground surface line
+    SDL_SetRenderDrawColor(gRenderer, 100, 100, 100, 255);
+    int prevScreenY = -999;
+    for (int sx = 0; sx < SCREEN_WIDTH; sx++) {
+        int worldX = worldLeft + sx;
+        float groundY, groundAngle;
+        if (level.GetGroundInfo(static_cast<float>(worldX), groundY, groundAngle)) {
+            int screenY = SCREEN_HEIGHT / 2 + static_cast<int>(groundY) - cameraY;
+            SDL_RenderDrawPoint(gRenderer, sx, screenY);
+            prevScreenY = screenY;
+        } else {
+            prevScreenY = -999;
+        }
+    }
 
-        SDL_SetRenderDrawColor(gRenderer, 60, 60, 60, 255);
-        int worldLeft = cameraX - SCREEN_WIDTH / 2;
-        int worldRight = cameraX + SCREEN_WIDTH / 2;
-        for (int wx = (worldLeft / 100) * 100; wx <= worldRight; wx += 100) {
+    // Draw tick marks every 100 world units on the surface
+    SDL_SetRenderDrawColor(gRenderer, 60, 60, 60, 255);
+    for (int wx = (worldLeft / 100) * 100; wx <= worldRight; wx += 100) {
+        float groundY, groundAngle;
+        if (level.GetGroundInfo(static_cast<float>(wx), groundY, groundAngle)) {
             int sx = wx - cameraX + SCREEN_WIDTH / 2;
-            if (sx >= 0 && sx <= SCREEN_WIDTH) {
-                SDL_RenderDrawLine(gRenderer, sx, groundY - 5, sx, groundY + 5);
+            int sy = SCREEN_HEIGHT / 2 + static_cast<int>(groundY) - cameraY;
+            if (sx >= 0 && sx < SCREEN_WIDTH && sy >= 0 && sy < SCREEN_HEIGHT) {
+                SDL_RenderDrawLine(gRenderer, sx, sy - 5, sx, sy + 5);
             }
         }
     }
