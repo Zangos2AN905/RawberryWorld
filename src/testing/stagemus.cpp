@@ -5,7 +5,7 @@
 void StartStageMusic() {
     
     // 1. Load the file path into a Mix_Music pointer first
-    Mix_Music* StageMusic = Mix_LoadMUS("assets/audio/Test_Zone.mid");
+    Mix_Music* StageMusic = Mix_LoadMUS("assets/audio/Test_Zone.ogg");
     
     // 2. Always error check to make sure the path isn't broken
     if (!StageMusic) {
